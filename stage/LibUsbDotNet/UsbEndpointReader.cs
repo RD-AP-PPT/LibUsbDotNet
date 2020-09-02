@@ -43,6 +43,9 @@ namespace LibUsbDotNet
     {
         private static int mDefReadBufferSize = 4096;
 
+        private const int mMaxReadQueueSize = 10000;
+        private static int mReadQueueSize = 1;
+
         private bool mDataReceivedEnabled;
         private int mReadBufferSize;
         private Thread mReadThread;
@@ -51,7 +54,14 @@ namespace LibUsbDotNet
 #endif
 
         internal UsbEndpointReader(UsbDevice usbDevice, int readBufferSize, byte alternateInterfaceID, ReadEndpointID readEndpointID, EndpointType endpointType)
-            : base(usbDevice, alternateInterfaceID, (Byte)readEndpointID, endpointType) { mReadBufferSize = readBufferSize; }
+            : this(usbDevice, readBufferSize, alternateInterfaceID, readEndpointID, endpointType, 1) { }
+
+        internal UsbEndpointReader(UsbDevice usbDevice, int readBufferSize, byte alternateInterfaceID, ReadEndpointID readEndpointID, EndpointType endpointType, int readQueueSize)
+            : base(usbDevice, alternateInterfaceID, (byte)readEndpointID, endpointType) 
+        {
+            mReadQueueSize = (readQueueSize > 1) ? Math.Min(mMaxReadQueueSize, readQueueSize) : 1;
+            mReadBufferSize = readBufferSize; 
+        }
 
         /// <summary>
         /// Default read buffer size when using the <see cref="DataReceived"/> event.
@@ -200,23 +210,48 @@ namespace LibUsbDotNet
 
             overlappedTransferContext.Reset();
 
-            byte[] buf = new byte[reader.mReadBufferSize];
+            // use simple buffer (mReadQueueSize == 1) or UsbTransferQueue (mReadQueueSize > 1) 
+            var buf = (mReadQueueSize == 1) ? new byte[reader.mReadBufferSize] : null;
+            var transferQueue = (mReadQueueSize > 1) ? new UsbTransferQueue(reader, mReadQueueSize, reader.mReadBufferSize, Timeout.Infinite, 0) : null;
             try
             {
                 while (!overlappedTransferContext.IsCancelled)
                 {
-                    int iTransferLength;
-                    ErrorCode eReturn = reader.Transfer(buf, 0, buf.Length, Timeout.Infinite, out iTransferLength);
-                    if (eReturn == ErrorCode.None)
+                    if (mReadQueueSize == 1)
                     {
-                        EventHandler<EndpointDataEventArgs> temp = reader.DataReceived;
-                        if (!ReferenceEquals(temp, null) && !overlappedTransferContext.IsCancelled)
+                        // use simple buffer 
+                        int iTransferLength;
+                        ErrorCode eReturn = reader.Transfer(buf, 0, buf.Length, Timeout.Infinite, out iTransferLength);
+                        
+                        if (eReturn == ErrorCode.None)
                         {
-                            temp(reader, new EndpointDataEventArgs(buf, iTransferLength));
+                            EventHandler<EndpointDataEventArgs> temp = reader.DataReceived;
+                            if (!ReferenceEquals(temp, null) && !overlappedTransferContext.IsCancelled)
+                            {
+                                temp(reader, new EndpointDataEventArgs(buf, iTransferLength));
+                            }
+                            continue;
                         }
-                        continue;
+                        if (eReturn != ErrorCode.IoTimedOut) break;
                     }
-                    if (eReturn != ErrorCode.IoTimedOut) break;
+                    else
+                    {
+                        // use UsbTransferQueue
+                        UsbTransferQueue.Handle handle;
+                        ErrorCode eReturn = transferQueue.Transfer(out handle);
+
+                        if (eReturn == ErrorCode.None)
+                        {
+                            EventHandler<EndpointDataEventArgs> temp = reader.DataReceived;
+                            if ((!ReferenceEquals(temp, null)) && (!handle.Context.IsCancelled))
+                            {
+                                temp(reader, new EndpointDataEventArgs(handle.Data, handle.Transferred));
+                            }
+                            continue;
+                        }
+
+                        if (eReturn != ErrorCode.IoTimedOut) break;
+                    }
                 }
             }
 #if !NETSTANDARD && !NETCOREAPP
@@ -227,6 +262,9 @@ namespace LibUsbDotNet
 #endif
             finally
             {
+                if (transferQueue != null)
+                    transferQueue.Free();
+
                 reader.Abort();
                 reader.mDataReceivedEnabled = false;
 

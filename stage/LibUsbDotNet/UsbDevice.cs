@@ -443,14 +443,28 @@ namespace LibUsbDotNet
         /// <returns>A <see cref="UsbEndpointReader"/> class ready for reading. If the specified endpoint is already been opened, the original <see cref="UsbEndpointReader"/> class is returned.</returns>
         public virtual UsbEndpointReader OpenEndpointReader(ReadEndpointID readEndpointID, int readBufferSize, EndpointType endpointType)
         {
+            return OpenEndpointReader(readEndpointID, readBufferSize, endpointType, 1);
+        }
+
+        /// <summary>
+        /// Opens an endpoint for reading with additional read queue size parameter.
+        /// </summary>
+        /// <param name="readEndpointID">Endpoint number for read operations.</param>
+        /// <param name="readBufferSize">Size of the read buffer allocated for the <see cref="UsbEndpointReader.DataReceived"/> event.</param>
+        /// <param name="endpointType">The type of endpoint to open.</param>
+        /// <param name="readQueueSize">Size of the read queue.</param>
+        /// <returns>A <see cref="UsbEndpointReader"/> class ready for reading. If the specified endpoint is already been opened, the original <see cref="UsbEndpointReader"/> class is returned.</returns>
+        public virtual UsbEndpointReader OpenEndpointReader(ReadEndpointID readEndpointID, int readBufferSize, EndpointType endpointType, int readQueueSize)
+        {
             foreach (UsbEndpointBase activeEndpoint in mActiveEndpoints)
-                if (activeEndpoint.EpNum == (byte) readEndpointID) 
-                    return (UsbEndpointReader) activeEndpoint;
+                if (activeEndpoint.EpNum == (byte)readEndpointID)
+                    return (UsbEndpointReader)activeEndpoint;
 
             byte altIntefaceID = mClaimedInterfaces.Count == 0 ? UsbAltInterfaceSettings[0] : UsbAltInterfaceSettings[mClaimedInterfaces[mClaimedInterfaces.Count - 1]];
 
-            UsbEndpointReader epNew = new UsbEndpointReader(this, readBufferSize, altIntefaceID, readEndpointID, endpointType);
-            return (UsbEndpointReader) mActiveEndpoints.Add(epNew);
+            // create usb endpoint reader with additional read queue size
+            var epNew = new UsbEndpointReader(this, readBufferSize, altIntefaceID, readEndpointID, endpointType, readQueueSize);
+            return (UsbEndpointReader)mActiveEndpoints.Add(epNew);
         }
 
         /// <summary>
